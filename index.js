@@ -2,7 +2,7 @@ require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
 const cookieParser = require('cookie-parser')
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
+const { MongoClient, ServerApiVersion, ObjectId, Timestamp } = require('mongodb')
 const jwt = require('jsonwebtoken')
 const morgan = require('morgan')
 
@@ -48,6 +48,15 @@ const client = new MongoClient(uri, {
 })
 async function run() {
   try {
+        // Send a ping to confirm a successful connection
+        await client.db('admin').command({ ping: 1 })
+        console.log(
+          'Pinged your deployment. You successfully connected to MongoDB!'
+        )
+        const db=client.db('plantNetLive')
+        const userCollection=db.collection('users')
+        const plantsCollection=db.collection('plants')
+       // const 
     // Generate jwt token
     app.post('/jwt', async (req, res) => {
       const email = req.body
@@ -76,12 +85,44 @@ async function run() {
         res.status(500).send(err)
       }
     })
+//save/update userinf
+app.post('/users/:email',async(req,res)=>{
+  const email=req.params.email
+      const user=req.body
+      //find user database
+      const query={email}
+      const isExist=await userCollection.findOne(query)
+      if(isExist){
+        return res.send(isExist)
+      }
+      const result=await userCollection.insertOne({...user,
+        role:"customer",
+        timestamp:Date.now()})
+      res.send(result)
 
-    // Send a ping to confirm a successful connection
-    await client.db('admin').command({ ping: 1 })
-    console.log(
-      'Pinged your deployment. You successfully connected to MongoDB!'
-    )
+})
+// add plants
+app.post('/plants',verifyToken, async(req,res)=>{
+  const plants=req.body
+  const result=await plantsCollection.insertOne(plants)
+  res.send(result)
+})
+app.get('/plants', async(req,res)=>{
+
+  const result=await plantsCollection.find().toArray()
+  res.send(result)
+})
+
+
+
+
+
+
+
+
+
+
+
   } finally {
     // Ensures that the client will close when you finish/error
   }
