@@ -56,6 +56,7 @@ async function run() {
         const db=client.db('plantNetLive')
         const userCollection=db.collection('users')
         const plantsCollection=db.collection('plants')
+        const ordersCollection=db.collection('orders')
        // const 
     // Generate jwt token
     app.post('/jwt', async (req, res) => {
@@ -112,15 +113,121 @@ app.get('/plants', async(req,res)=>{
   const result=await plantsCollection.find().toArray()
   res.send(result)
 })
+app.get('/plants/:id', async(req,res)=>{
+const id=req.params.id
+const  query={_id:new ObjectId(id)}
+
+  const result=await plantsCollection.findOne(query)
+  res.send(result)
+})
+
+//save order 
+
+app.post('/orders',verifyToken, async(req,res)=>{
+  const orderInf=req.body
+  const result=await ordersCollection.insertOne(orderInf)
+  res.send(result)
+})
+
+// manage plant quantity
+app.patch('/plants/quantity/:id',verifyToken,async(req,res)=>{
+  const id=req.params.id
+  const query={_id:new ObjectId(id)}
+  const {quantityUpdate,status}=req.body
+
+  let updateDoc = {};
+
+  if (status === 'decrease') {
+    updateDoc = {
+      $inc: { quantity: -quantityUpdate },
+    };
+  } else if (status === 'increase') {
+    updateDoc = {
+      $inc: { quantity: quantityUpdate },
+    };
+  }
+  const result = await plantsCollection.updateOne(query,updateDoc)
+  res.send(result)
+})
+
+// get order by email 
+app.get('/customerorder/:email',verifyToken,async(req,res)=>{
+  const email=req.params.email
+  const query={'customer.email':email}
+  //const result=await ordersCollection.find(query).toArray()
+  const result=await ordersCollection.aggregate([
+    {
+      $match:query,
+    },{
+      $addFields:{
+        plantId: {$toObjectId:'$plantId'}
+      }
+    },{
+      $lookup:{
+        from:'plants',
+        localField:'plantId',
+        foreignField:'_id',
+        as:'plants'
+
+      }
+    },
+    {
+      $unwind:'$plants'
+    },
+    {
+      $addFields:{
+        name:'$plants.name',
+        plantphoto:'$plants.plantphoto',
+        category:'$plants.category',
+
+      }
+    },
+    {
+      $project:{plants:0}
+    }
+  ]).toArray()
+  res.send(result)
+
+  
+})
+
+// cancel orders
+app.delete('/order/:id',verifyToken,async(req,res)=>{
+  const id=req.params.id
+  const query={_id:new ObjectId(id)}
+  const order= await ordersCollection.findOne(query)
+  if(order.status==='Delivered'){
+    return res.status(409).send("cannor deal cancel once product is deleverd")
+  }
+  const result= await ordersCollection.deleteOne(query)
+  res.send(result)
+})
+
+//manage user status and rule
+app.patch('/user/:email',verifyToken,async(req,res)=>{
+     const email=req.params.email
+     const query={email}
+     const user=await userCollection.findOne(query)
+     if(!user|| user?.status==='requested')
+      return res.status(400).send('you have already requasted wait for some times')
+
+   const updateDoc={
+    $set:{
+      status:'requested',
+    }
+   }
+   const result=await userCollection.updateOne(query,updateDoc)
+   res.send(result)
+})
+// get    user role
+app.get('/user/role/:email',async (req,res)=>{
+       const email=req.params.email
+       const result=await userCollection.findOne({email})
+       res.send({role:result?.role})
+})
 
 
-
-
-
-
-
-
-
+ 
 
 
   } finally {
