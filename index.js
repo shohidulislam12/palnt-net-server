@@ -5,7 +5,7 @@ const cookieParser = require('cookie-parser')
 const { MongoClient, ServerApiVersion, ObjectId, Timestamp } = require('mongodb')
 const jwt = require('jsonwebtoken')
 const morgan = require('morgan')
-
+const nodemailer = require("nodemailer");
 const port = process.env.PORT || 9000
 const app = express()
 // middleware
@@ -57,7 +57,72 @@ async function run() {
         const userCollection=db.collection('users')
         const plantsCollection=db.collection('plants')
         const ordersCollection=db.collection('orders')
-       // const 
+       // const verify token
+const verifyAdmin=async(req,res,next)=>{
+//console.log('data from verify midddle',req.user?.email)
+const email=req.user?.email
+const query={email}
+const result=await userCollection.findOne(query)
+if(!result||result?.role!=='admin'){
+  return res.status(403).send({message:'forbidden access Admin only Action'})
+}
+
+next()
+
+}
+const verifySeller=async(req,res,next)=>{
+//console.log('data from verify midddle',req.user?.email)
+const email=req.user?.email
+const query={email}
+const result=await userCollection.findOne(query)
+if(!result||result?.role!=='seller'){
+  return res.status(403).send({message:'forbidden access Seller only Action'})
+}
+
+next()
+
+}
+//sent mail usingg nodemailer
+const sentEmail=(email,emailData)=>{
+  //creat a transporter
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false, // true for port 465, false for other ports
+    auth: {
+      user:process.env.NODEMAILER_USER,
+      pass:process.env.NODEMAILERPASS,
+    },
+  });
+  transporter.verify((error,success)=>{
+    if(error){
+      console.log(error)
+    }
+    else{
+      console.log('transport is ready')
+    }
+  });
+  const mailBody={
+    from: process.env.NODEMAILER_USER, // sender address
+    to:email, // list of receivers
+    subject:emailData?.subject, // Subject line
+    //text: email?.message, // plain text body
+    html: `<p>${emailData?.message}</p>`, // html body
+  }
+  //sent mail
+  transporter.sendMail(mailBody,(err,inf)=>{
+    if(err){
+      console.log(err)
+    }
+    else{
+      console.log("email-sent: "+ inf?.response)
+    }
+  })
+  
+}
+
+
+
     // Generate jwt token
     app.post('/jwt', async (req, res) => {
       const email = req.body
@@ -103,7 +168,7 @@ app.post('/users/:email',async(req,res)=>{
 
 })
 // add plants
-app.post('/plants',verifyToken, async(req,res)=>{
+app.post('/plants',verifyToken,verifySeller, async(req,res)=>{
   const plants=req.body
   const result=await plantsCollection.insertOne(plants)
   res.send(result)
@@ -124,8 +189,21 @@ const  query={_id:new ObjectId(id)}
 //save order 
 
 app.post('/orders',verifyToken, async(req,res)=>{
+
   const orderInf=req.body
   const result=await ordersCollection.insertOne(orderInf)
+  if(result?.insertedId){
+    //sent mail customer
+   sentEmail(orderInf?.customer?.email,{
+    subject:'order sucessfully',
+    message:` You've placed an order sucessfully. Transition Id:${result?.insertedId}`
+   })
+    //sent mail seller
+   sentEmail(orderInf?.seller,{
+    subject:'order booking ',
+    message:` You've placed an order to process. Order From:${orderInf?.customer?.email}`
+   })
+  }
   res.send(result)
 })
 
@@ -190,6 +268,25 @@ app.get('/customerorder/:email',verifyToken,async(req,res)=>{
 
   
 })
+// get all user data
+app.get('/all-user/:email',verifyToken, verifyAdmin, async(req,res)=>{
+  const email=req.params.email
+  const query={email:{$ne:email}}
+ const result=await userCollection.find(query).toArray()
+ res.send(result)
+})
+// update user rule and status
+app.patch('/user/role/:email',verifyToken,async(req,res)=>{
+   const email=req.params.email
+   const {role}=req.body
+   const filter={email}
+   const updateDoc={
+    $set:{role,status:'Verified'}
+   }
+   const result=await userCollection.updateOne(filter,updateDoc)
+   res.send(result)
+}) 
+
 
 // cancel orders
 app.delete('/order/:id',verifyToken,async(req,res)=>{
@@ -226,8 +323,74 @@ app.get('/user/role/:email',async (req,res)=>{
        res.send({role:result?.role})
 })
 
+// seller plan 
+app.get('/plants/seller/:email',verifyToken,verifySeller,async(req,res)=>{
+  const email=req.params?.email
+  const query={'sellerInf.email':email}
+  const result=await plantsCollection.find(query).toArray()
+  res.send(result)
 
- 
+})
+//delete
+app.delete('/plants/:id',async(req,res)=>{
+  const id=req.params.id
+  const query={_id:new ObjectId(id)}
+  const result=await plantsCollection.deleteOne(query)
+  res.send(result)
+})
+
+
+// get order for selelr 
+app.get('/sellerorder/:email',verifyToken,verifySeller,async(req,res)=>{
+  const email=req.params.email
+  const query={seller:email}
+  //const result=await ordersCollection.find(query).toArray()
+  const result=await ordersCollection.aggregate([
+    {
+      $match:query,
+    },{
+      $addFields:{
+        plantId: {$toObjectId:'$plantId'}
+      }
+    },{
+      $lookup:{
+        from:'plants',
+        localField:'plantId',
+        foreignField:'_id',
+        as:'plants'
+
+      }
+    },
+    {
+      $unwind:'$plants'
+    },
+    {
+      $addFields:{
+        name:'$plants.name',
+       
+
+      }
+    },
+    {
+      $project:{plants:0}
+    }
+  ]).toArray()
+  res.send(result)
+
+  
+})
+ // update status order from seller
+ app.patch('/order/status/:id',verifyToken,verifySeller,async(req,res)=>{
+  const id=req.params.id
+  const {status}=req.body
+  const filter={_id:new ObjectId(id)}
+  const updateDoc={
+   $set:{status}
+  }
+  const result=await ordersCollection.updateOne(filter,updateDoc)
+  res.send(result)
+}) 
+
 
 
   } finally {
